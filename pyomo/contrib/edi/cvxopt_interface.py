@@ -972,7 +972,10 @@ def convexity_detector(pyomo_component):
                             structures['Signomial_Program'][0] = False
                             structures['Signomial_Program'][1] = None                            
                         else:
-                            lhs_final = gpRow_divide(gpRows_lhs, gpRows_rhs)
+                            if gpRows_rhs[0][1] == 0.0:
+                                lhs_final = gpRows_lhs
+                            else:
+                                lhs_final = gpRow_divide(gpRows_lhs, gpRows_rhs)
                     else:
                         lhs_zeroed = gpRow_subtract(copy.deepcopy(gpRows_lhs), copy.deepcopy(gpRows_rhs))
                         unique, counts = numpy.unique([lhz[0] for lhz in lhs_zeroed], return_counts=True)
@@ -1029,18 +1032,18 @@ def convexity_detector(pyomo_component):
         if structures['Signomial_Program'][0] != False:
             structures['Signomial_Program'][2] = operatorList
 
-    if structures['Geometric_Program'][0] != False:
-        conIxs = [ structures['Geometric_Program'][1][i][0] for i in range(0,len(structures['Geometric_Program'][1])) ]
-        unique, counts = numpy.unique(conIxs, return_counts=True)
-        countDict = dict(zip(unique, counts))
-        for i in range(0,len(operatorList)):
-            conIx = i+1
-            if operatorList[i] == '==':
-                if countDict[conIx] > 1:
-                    structures['Geometric_Program'][0] = False
-                    structures['Geometric_Program'][1] = None
-                    structures['Geometric_Program'][2] = None
-                    break
+        if structures['Geometric_Program'][0] != False:
+            conIxs = [ structures['Geometric_Program'][1][i][0] for i in range(0,len(structures['Geometric_Program'][1])) ]
+            unique, counts = numpy.unique(conIxs, return_counts=True)
+            countDict = dict(zip(unique, counts))
+            for i in range(0,len(operatorList)):
+                conIx = i+1
+                if operatorList[i] == '==':
+                    if countDict[conIx] > 1:
+                        structures['Geometric_Program'][0] = False
+                        structures['Geometric_Program'][1] = None
+                        structures['Geometric_Program'][2] = None
+                        break
 
     return structures
 
@@ -1203,7 +1206,7 @@ def solve_GP(structures):
     return res
 
 
-def evaluate_posynomial(gpRows,x_star, printer=False):
+def evaluate_posynomial(gpRows,x_star):
     N_vars = len(gpRows[0])-2
     ucis = np.unique([rw[0] for rw in gpRows])
     if len(ucis) != 1:
@@ -1235,11 +1238,8 @@ def monomial_approximation(gpRows,x_star):
     ucis = np.unique([rw[0] for rw in gpRows])
     if len(ucis) != 1:
         raise ValueError('A non-posynomial object was detected')
-    
-    try:
-        f, dfdx = evaluate_posynomial(gpRows,x_star)
-    except:
-        f, dfdx = evaluate_posynomial(gpRows,x_star,True)
+
+    f, dfdx = evaluate_posynomial(gpRows,x_star)
 
     lc = f
     a = [x_star[i]/f * dfdx[i] for i in range(0,N_vars)]
@@ -1321,113 +1321,7 @@ def pccp_modification(constraintList,penalty_exponent=5.0):
     return constraintList, spCounter
 
 
-def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100):
-    variableList = [ vr for vr in m.component_objects( pyo.Var, descend_into=True, active=True ) ]
-
-    unwrappedVariables = []
-    vrIdx = -1
-    for i in range(0, len(variableList)):
-        vr = variableList[i]
-        vrIdx += 1
-        if isinstance(vr, ScalarVar):
-            unwrappedVariables.append(vr)
-        elif isinstance(vr, IndexedVar):
-            unwrappedVariables.append(vr)
-            for sd in vr.index_set().data():
-                vrIdx += 1
-                unwrappedVariables.append(vr[sd])
-        else:
-            raise DeveloperError( 'Variable is not a variable.  Should not happen.  Contact developers' )
-
-    x_star = [uv.value for uv in unwrappedVariables]
-
-    spRows = structures['Signomial_Program'][1]
-    operators = structures['Signomial_Program'][2]
-
-    gpRows = []
-    numerator_rows = {}
-    numerator_row_indices = {}
-    denominator_rows = {}
-
-    conIxs,conCounts = np.unique([spRows[i][0] for i in range(0,len(spRows))],return_counts=True)
-    conIxs = conIxs.tolist()
-    conCounts = conCounts.tolist()
-
-    N_spcons = 0
-    nrix = 0
-    for i in range(0,len(spRows)):
-        rw = spRows[i]
-        if -1*rw[0]-1 in conIxs and rw[0]>=0:
-            if operators[rw[0]-1] == '==' and conCounts[conIxs.index(conIxs[rw[0]])]>1:
-                # need to account for the fact that a signomial equality becomes a monomial equality
-                if rw[0] not in list(numerator_rows.keys()):
-                    numerator_rows[rw[0]] = []
-                    numerator_row_indices[rw[0]] = [nrix]
-                    gpRows.append(None)
-                    nrix+=1
-                    N_spcons += 2
-                numerator_rows[rw[0]].append(rw)
-            else:
-                if rw[0] not in list(numerator_rows.keys()):
-                    numerator_rows[rw[0]] = []
-                    numerator_row_indices[rw[0]] = []
-                numerator_rows[rw[0]].append(rw)
-                numerator_row_indices[rw[0]].append(nrix)
-                gpRows.append(None)
-                nrix+=1
-                N_spcons += 1
-        elif rw[0]<0:
-            if -1*(rw[0]+1) not in list(denominator_rows.keys()):
-                denominator_rows[-1*(rw[0]+1)] = []  
-            denominator_rows[-1*(rw[0]+1)].append(rw)
-        else:
-            gpRows.append(rw)
-            nrix+=1
-
-    for itr in range(0,max_iter):
-        for ky, vl in numerator_rows.items():
-            ma = monomial_approximation(copy.deepcopy(denominator_rows[ky]),x_star)
-            ma[0][0] = denominator_rows[ky][0][0]
-            if operators[ky-1] == '==' and len(numerator_rows[ky])>1:
-                ma_num = monomial_approximation(copy.deepcopy(numerator_rows[ky]),x_star)
-                ma_num[0][0] = numerator_rows[ky][0][0]
-                posy = gpRow_divide(ma_num, ma)
-                gpRows[numerator_row_indices[ky][0]] = posy[0]
-            else:
-                posy = gpRow_divide(copy.deepcopy(numerator_rows[ky]), ma)
-                for i in range(0,len(numerator_row_indices[ky])):
-                    gpRows[numerator_row_indices[ky][i]] = posy[i]
-                    
-        # for rw in gpRows:
-        #     print(rw)
-
-        pack = {}
-        pack['Linear_Program'] = [False]
-        pack['Quadratic_Program'] = [False]
-        pack['Geometric_Program'] = [True, gpRows, operators]
-        
-        if itr == 0:
-            prevObj = np.inf
-        else:
-            prevObj = res['primal objective']
-        res = solve_GP(pack)
-
-        new_x_star = np.exp(res['x'])
-        reltol_check = abs(prevObj - res['primal objective'])/res['primal objective'] <= reltol
-        var_reltol_check = all([abs(new_x_star[i]-x_star[i])/new_x_star[i] <= var_reltol for i in range(0,len(x_star))])
-
-        if var_reltol_check and reltol_check:
-            break
-        else:
-            # print(itr)
-            # print(res)
-            # print(res['primal objective'])
-            # print(new_x_star)
-            x_star = [ nxv[0] for nxv in new_x_star.tolist()]
-
-    return res
-
-def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = True, penalty_exponent=5.0):
+def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = True, penalty_exponent=5.0):
     variableList = [ vr for vr in m.component_objects( pyo.Var, descend_into=True, active=True ) ]
 
     unwrappedVariables = []
@@ -1480,7 +1374,13 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
                 #is an objective, 
                 operator = '<='                
 
-            if operator == '==' and conCounts[conIxs.index(conIxs[constraintCounter])]>1:
+            N_monomials_num = conCounts[conIxs.index(constraintCounter)]
+            if -1*constraintCounter-1 in conIxs:
+                N_monomials_dem = conCounts[conIxs.index(-1*constraintCounter-1)]
+            else:
+                N_monomials_dem = 0
+            
+            if operator == '==' and N_monomials_dem >= 1 :
                 # is signomial equality
                 if denominatorBuffer == []:
                     denominatorBuffer = None
@@ -1592,10 +1492,6 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
                     for j in numix:
                         gpRows[j] = posy[j-numix[0]]
 
-        # print()
-        # for rw in gpRows:
-        #     print(rw)
-
         pack = {}
         pack['Linear_Program'] = [False]
         pack['Quadratic_Program'] = [False]
@@ -1614,17 +1510,13 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
         if var_reltol_check and reltol_check:
             break
         else:
-            # print(itr)
-            # print(res)
-            # print(res['primal objective'])
-            # print(new_x_star)
             x_star = [ nxv[0] for nxv in new_x_star.tolist()]
 
     return res
 
-def cvxopt_solve(m, use_pccp = 0):
+def cvxopt_solve(m):
     cvxopt.solvers.options['show_progress'] = False
-    cvxopt.solvers.options['maxiters'] = 1000
+    cvxopt.solvers.options['maxiters'] = 100
     cvxopt.printing.options['width'] = -1
 
     structures = convexity_detector(m)
@@ -1639,16 +1531,8 @@ def cvxopt_solve(m, use_pccp = 0):
         res = solve_GP(structures)
         res['problem_structure'] = 'geometric_program'
     elif structures['Signomial_Program'][0]:
-        if use_pccp==0:
-            res = solve_SP(structures,m)
-        elif use_pccp == 1:
-            res = solve_PCCP(structures,m,use_pccp=False)
-            res['problem_structure'] = 'signomial_program'
-        else:
-            res = solve_PCCP(structures,m,use_pccp=True)
-            res['problem_structure'] = 'signomial_program_pccp'
-            # res = solve_SP(structures,m)
-        res['problem_structure'] = 'signomial_program'
+        res = solve_SP(structures,m)
+        res['problem_structure'] = 'signomial_program_pccp'
     else:
         # print(structures)
         raise ValueError('Could not convert the formulation to a valid CVXOPT structure (LP,QP,GP,SP)')
