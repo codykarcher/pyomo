@@ -1203,7 +1203,7 @@ def solve_GP(structures):
     return res
 
 
-def evaluate_posynomial(gpRows,x_star):
+def evaluate_posynomial(gpRows,x_star, printer=False):
     N_vars = len(gpRows[0])-2
     ucis = np.unique([rw[0] for rw in gpRows])
     if len(ucis) != 1:
@@ -1235,8 +1235,11 @@ def monomial_approximation(gpRows,x_star):
     ucis = np.unique([rw[0] for rw in gpRows])
     if len(ucis) != 1:
         raise ValueError('A non-posynomial object was detected')
-
-    f, dfdx = evaluate_posynomial(gpRows,x_star)
+    
+    try:
+        f, dfdx = evaluate_posynomial(gpRows,x_star)
+    except:
+        f, dfdx = evaluate_posynomial(gpRows,x_star,True)
 
     lc = f
     a = [x_star[i]/f * dfdx[i] for i in range(0,N_vars)]
@@ -1315,7 +1318,7 @@ def pccp_modification(constraintList,penalty_exponent=5.0):
         nextRow[i+slackStartIndex] = -1
         constraintList.append(TemplateDict([nextRow],None,False))
         
-    return constraintList
+    return constraintList, spCounter
 
 
 def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100):
@@ -1395,8 +1398,8 @@ def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100):
                 for i in range(0,len(numerator_row_indices[ky])):
                     gpRows[numerator_row_indices[ky][i]] = posy[i]
                     
-        for rw in gpRows:
-            print(rw)
+        # for rw in gpRows:
+        #     print(rw)
 
         pack = {}
         pack['Linear_Program'] = [False]
@@ -1416,15 +1419,15 @@ def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100):
         if var_reltol_check and reltol_check:
             break
         else:
-            print(itr)
+            # print(itr)
             # print(res)
-            print(res['primal objective'])
-            print(new_x_star)
+            # print(res['primal objective'])
+            # print(new_x_star)
             x_star = [ nxv[0] for nxv in new_x_star.tolist()]
 
     return res
 
-def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = False, penalty_exponent=5.0):
+def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = True, penalty_exponent=5.0):
     variableList = [ vr for vr in m.component_objects( pyo.Var, descend_into=True, active=True ) ]
 
     unwrappedVariables = []
@@ -1521,7 +1524,8 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
                 constraintList[i]['denominator'][j][0] = 1
 
     if use_pccp:
-        constraintList = pccp_modification(constraintList,penalty_exponent)
+        constraintList, N_slacks = pccp_modification(constraintList,penalty_exponent)
+        x_star += [1.0]*N_slacks
 
     gpRows = []
     nextRowIndex = 0
@@ -1588,9 +1592,9 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
                     for j in numix:
                         gpRows[j] = posy[j-numix[0]]
 
-        print()
-        for rw in gpRows:
-            print(rw)
+        # print()
+        # for rw in gpRows:
+        #     print(rw)
 
         pack = {}
         pack['Linear_Program'] = [False]
@@ -1610,15 +1614,15 @@ def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, us
         if var_reltol_check and reltol_check:
             break
         else:
-            print(itr)
+            # print(itr)
             # print(res)
-            print(res['primal objective'])
-            print(new_x_star)
+            # print(res['primal objective'])
+            # print(new_x_star)
             x_star = [ nxv[0] for nxv in new_x_star.tolist()]
 
     return res
 
-def cvxopt_solve(m, use_pccp = True):
+def cvxopt_solve(m, use_pccp = 0):
     cvxopt.solvers.options['show_progress'] = False
     cvxopt.solvers.options['maxiters'] = 1000
     cvxopt.printing.options['width'] = -1
@@ -1635,10 +1639,14 @@ def cvxopt_solve(m, use_pccp = True):
         res = solve_GP(structures)
         res['problem_structure'] = 'geometric_program'
     elif structures['Signomial_Program'][0]:
-        if use_pccp:
-            res = solve_PCCP(structures,m)
+        if use_pccp==0:
+            res = solve_SP(structures,m)
+        elif use_pccp == 1:
+            res = solve_PCCP(structures,m,use_pccp=False)
+            res['problem_structure'] = 'signomial_program'
         else:
-            res = solve_PCCP(structures,m,use_pccp=use_pccp)
+            res = solve_PCCP(structures,m,use_pccp=True)
+            res['problem_structure'] = 'signomial_program_pccp'
             # res = solve_SP(structures,m)
         res['problem_structure'] = 'signomial_program'
     else:
