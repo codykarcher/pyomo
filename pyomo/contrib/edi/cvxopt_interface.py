@@ -1245,50 +1245,80 @@ def monomial_approximation(gpRows,x_star):
 
     return [[None, lc] + a]
 
-def pccp_modification(gpRows,N_spcons,penalty_exponent=5.0):
-    # split signomial equalities
+def TemplateDict(num=None, dem=None, app=False):
+    return {'numerator':              num, 
+            'denominator':            dem, 
+            'approximateNumerator':   app,
+            'numeratorIndices':       []}
 
-    # Make the PCCP modification
+def pccp_modification(constraintList,penalty_exponent=5.0):
 
-    # slack variable slots
-    slackStartIndex = len(gpRows[0])
-    objectiveRows = []
-    newGProws = []
-    for i in range(0,len(gpRows)):
-        gpRows[i] += [0.0]*N_spcons
-        if gpRows[i][0] in [-1,0]:
-            objectiveRows += gpRows[i]
-        else:
-            newGProws += gpRows[i]
+    slackStartIndex = len(constraintList[0]['numerator'][0])
+    
+    # count the number of sp constraints
+    spCounter = 0
+    for i in range(0,len(constraintList)):
+        if constraintList[i]['denominator'] is not None or constraintList[i]['approximateNumerator']==True:
+            spCounter += 1
 
-    slackMonomial = [0.0]*len(gpRows[0])
+    # allocate empty slots for slack variables
+    for i in range(0,len(constraintList)):
+        for j in range(0,len(constraintList[i]['numerator'])): 
+            constraintList[i]['numerator'][j] += [0.0]*spCounter
+        if constraintList[i]['denominator'] is not None:
+            for j in range(0,len(constraintList[i]['denominator'])): 
+                constraintList[i]['denominator'][j] += [0.0]*spCounter
+
+    # create slack monomial
+    slackMonomial = [0.0]*len(constraintList[0]['numerator'][0])
     for i in range(0,len(slackMonomial)):
         if i >= slackStartIndex:
             slackMonomial[i] = penalty_exponent
     slackMonomial[0] = None
     slackMonomial[1] = 1.0
 
-    # slacks in objective
-    newObjectiveRows = gpRow_multiply(objectiveRows, [slackMonomial])
-    gpRows = newObjectiveRows + newGProws
-    
+    # add slacks to each constraint
+    spIndex = 0
+    for i in range(0,len(constraintList)):
+        if i == 0:
+            constraintList[i]['numerator'] = gpRow_multiply(constraintList[i]['numerator'], [slackMonomial])
+        else:
+            if constraintList[i]['denominator'] is not None:
+                # is a SP constraint
+                slackRow = [0.0]*len(constraintList[0]['numerator'][0])
+                slackRow[0] = None
+                slackRow[1] = 1.0
+                slackRow[slackStartIndex+spIndex] = 1.0
+                # print(slackRow)
+                # print(constraintList[i]['denominator'])
+                # print(gpRow_multiply(constraintList[i]['denominator'], [slackRow]))
+                constraintList[i]['denominator'] = gpRow_multiply(constraintList[i]['denominator'], [slackRow])
+                spIndex += 1
+            elif constraintList[i]['approximateNumerator']==True:
+                # is a posynomial equality
+                slackRow = [0.0]*len(constraintList[0]['numerator'][0])
+                slackRow[0] = None
+                slackRow[1] = 1.0
+                slackRow[slackStartIndex+spIndex] = 1.0
+                constraintList[i]['numerator'] = gpRow_divide(constraintList[i]['numerator'], [slackRow])
+                spIndex += 1
+            else:
+                # constraint needs no slack
+                pass
+
     # add s>=1
-    currentCon = gpRows[-1][0]
-    for i in range(0,N_spcons):
-        currentCon += 1
-        nextRow = [0.0]*len(gpRows[0])
-        nextRow[0] = currentCon
+    for i in range(0,spCounter):
+        # currentCon += 1
+        nextRow = [0.0]*len(constraintList[0]['numerator'][0])
+        nextRow[0] = None
         nextRow[1] = 1.0
         nextRow[i+slackStartIndex] = -1
-        gpRows.append(nextRow)
+        constraintList.append(TemplateDict([nextRow],None,False))
         
-    # add slacks to each signomial
-    
+    return constraintList
 
 
-
-
-def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = True, penalty_exponent=5.0):
+def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100):
     variableList = [ vr for vr in m.component_objects( pyo.Var, descend_into=True, active=True ) ]
 
     unwrappedVariables = []
@@ -1317,6 +1347,8 @@ def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_
     denominator_rows = {}
 
     conIxs,conCounts = np.unique([spRows[i][0] for i in range(0,len(spRows))],return_counts=True)
+    conIxs = conIxs.tolist()
+    conCounts = conCounts.tolist()
 
     N_spcons = 0
     nrix = 0
@@ -1349,40 +1381,244 @@ def solve_SP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_
             gpRows.append(rw)
             nrix+=1
 
-    if use_pccp:
-        gpRows, = pccp_modification(gpRows,N_spcons,penalty_exponent=penalty_exponent)
-    cody
-
     for itr in range(0,max_iter):
         for ky, vl in numerator_rows.items():
             ma = monomial_approximation(copy.deepcopy(denominator_rows[ky]),x_star)
+            ma[0][0] = denominator_rows[ky][0][0]
             if operators[ky-1] == '==' and len(numerator_rows[ky])>1:
                 ma_num = monomial_approximation(copy.deepcopy(numerator_rows[ky]),x_star)
+                ma_num[0][0] = numerator_rows[ky][0][0]
                 posy = gpRow_divide(ma_num, ma)
                 gpRows[numerator_row_indices[ky][0]] = posy[0]
             else:
                 posy = gpRow_divide(copy.deepcopy(numerator_rows[ky]), ma)
                 for i in range(0,len(numerator_row_indices[ky])):
                     gpRows[numerator_row_indices[ky][i]] = posy[i]
+                    
+        for rw in gpRows:
+            print(rw)
 
         pack = {}
         pack['Linear_Program'] = [False]
         pack['Quadratic_Program'] = [False]
         pack['Geometric_Program'] = [True, gpRows, operators]
         
+        if itr == 0:
+            prevObj = np.inf
+        else:
+            prevObj = res['primal objective']
         res = solve_GP(pack)
 
         new_x_star = np.exp(res['x'])
+        reltol_check = abs(prevObj - res['primal objective'])/res['primal objective'] <= reltol
         var_reltol_check = all([abs(new_x_star[i]-x_star[i])/new_x_star[i] <= var_reltol for i in range(0,len(x_star))])
 
         if var_reltol_check and reltol_check:
             break
         else:
+            print(itr)
+            # print(res)
+            print(res['primal objective'])
+            print(new_x_star)
             x_star = [ nxv[0] for nxv in new_x_star.tolist()]
 
     return res
 
-def cvxopt_solve(m):
+def solve_PCCP(structures, m, reltol=1e-6, var_reltol = 1e-6, max_iter = 100, use_pccp = False, penalty_exponent=5.0):
+    variableList = [ vr for vr in m.component_objects( pyo.Var, descend_into=True, active=True ) ]
+
+    unwrappedVariables = []
+    vrIdx = -1
+    for i in range(0, len(variableList)):
+        vr = variableList[i]
+        vrIdx += 1
+        if isinstance(vr, ScalarVar):
+            unwrappedVariables.append(vr)
+        elif isinstance(vr, IndexedVar):
+            unwrappedVariables.append(vr)
+            for sd in vr.index_set().data():
+                vrIdx += 1
+                unwrappedVariables.append(vr[sd])
+        else:
+            raise DeveloperError( 'Variable is not a variable.  Should not happen.  Contact developers' )
+
+    x_star = [uv.value for uv in unwrappedVariables]
+
+    spRows = structures['Signomial_Program'][1]
+    operators = structures['Signomial_Program'][2]
+    
+    conIxs,conCounts = np.unique([spRows[i][0] for i in range(0,len(spRows))],return_counts=True)
+    conIxs = conIxs.tolist()
+    conCounts = conCounts.tolist()
+
+    constraintList = []
+
+    constraintCounter = 0
+    lastConstraintIndex = 0
+    numeratorBuffer = []
+    denominatorBuffer = []
+    newOperators = []
+
+    for i in range(0,len(spRows)+1):
+        if i == len(spRows):
+            lastConstraintIndex = 1
+            rw = [-10]
+        else:
+            rw = spRows[i]
+            
+        if rw[0] == lastConstraintIndex:
+            numeratorBuffer.append(rw)
+        elif -1*rw[0]-1 == lastConstraintIndex:
+            denominatorBuffer.append(rw)
+        else:
+            if constraintCounter > 0:
+                operator = operators[constraintCounter-1]
+            else:
+                #is an objective, 
+                operator = '<='                
+
+            if operator == '==' and conCounts[conIxs.index(conIxs[constraintCounter])]>1:
+                # is signomial equality
+                if denominatorBuffer == []:
+                    denominatorBuffer = None
+                constraintList.append(TemplateDict(numeratorBuffer, denominatorBuffer, True))
+                newOperators.append('<=')
+
+                if denominatorBuffer == None:
+                    denominatorBuffer = [None, 1.0] + [0.0]*len(x_star)
+                constraintList.append(TemplateDict(copy.deepcopy(denominatorBuffer), copy.deepcopy(numeratorBuffer), True))
+                newOperators.append('<=')   
+
+            elif operator == '==':
+                # monomial equality
+                constraintList.append(TemplateDict(numeratorBuffer, None, False))
+                newOperators.append('<=')
+
+                flippedRows = []
+                for srw in numeratorBuffer:
+                    newRow = [ srw[0], 1.0/srw[1] ] + [-1*vl for vl in srw[2:]]
+                    flippedRows.append(newRow)
+                constraintList.append(TemplateDict(numeratorBuffer, None, False))
+                newOperators.append('<=')
+                
+            else:
+                if denominatorBuffer == []:
+                    denominatorBuffer = None
+                constraintList.append(TemplateDict(numeratorBuffer, denominatorBuffer, False))
+                newOperators.append(operator)
+
+            if i != len(spRows):
+                numeratorBuffer = [rw]
+                denominatorBuffer = []
+                constraintCounter += 1
+                lastConstraintIndex = rw[0]
+
+    for i in range(0,len(constraintList)):
+        for j in range(0,len(constraintList[i]['numerator'])): 
+            constraintList[i]['numerator'][j][0] = 1
+        if constraintList[i]['denominator'] is not None:
+            for j in range(0,len(constraintList[i]['denominator'])): 
+                constraintList[i]['denominator'][j][0] = 1
+
+    if use_pccp:
+        constraintList = pccp_modification(constraintList,penalty_exponent)
+
+    gpRows = []
+    nextRowIndex = 0
+    approximatedConstraintList = []
+    for i in range(0,len(constraintList)):
+        num = constraintList[i]['numerator']
+        dem = constraintList[i]['denominator']
+        app = constraintList[i]['approximateNumerator']
+        
+        for j in range(0,len(num)):
+            constraintList[i]['numerator'][j][0] = i
+            
+        if dem is not None:
+            for j in range(0,len(dem)):
+                constraintList[i]['denominator'][j][0] = -1*i - 1
+        
+        if dem is None and not app:
+            # gp compatible
+            gpRows += num
+            nextRowIndex += len(num)
+            
+        elif dem is None:
+            # posynomial equality
+            gpRows.append(None)
+            constraintList[i]['numeratorIndices'] = [nextRowIndex]
+            approximatedConstraintList.append(constraintList[i])
+            nextRowIndex += 1
+
+        elif not app:
+            # signomial inequality, dont approximate numerator
+            gpRows += [None]*len(num)
+            constraintList[i]['numeratorIndices'] = list(range(nextRowIndex,nextRowIndex+len(num)))
+            approximatedConstraintList.append(constraintList[i])
+            nextRowIndex += len(num)
+                        
+        else:
+            # signomial equality, approximate numerator
+            gpRows.append(None)
+            constraintList[i]['numeratorIndices'] = [nextRowIndex]
+            approximatedConstraintList.append(constraintList[i])
+            nextRowIndex += 1
+
+    for itr in range(0,max_iter):
+        for i in range(0,len(approximatedConstraintList)):
+            num = approximatedConstraintList[i]['numerator']
+            dem = approximatedConstraintList[i]['denominator']
+            numix = approximatedConstraintList[i]['numeratorIndices']
+            if approximatedConstraintList[i]['denominator'] is None:
+                num_ma = monomial_approximation(copy.deepcopy(num),x_star)
+                num_ma[0][0] = num[0][0]
+                gpRows[numix[0]] = num_ma[0]
+            else:
+                if approximatedConstraintList[i]['approximateNumerator']:
+                    num_ma = monomial_approximation(copy.deepcopy(num),x_star)
+                    dem_ma = monomial_approximation(copy.deepcopy(dem),x_star)
+                    num_ma[0][0] = num[0][0]
+                    dem_ma[0][0] = dem[0][0]
+                    frac = gpRow_divide(num_ma,dem_ma)
+                    gpRows[numix[0]] = frac[0]
+                else:
+                    dem_ma = monomial_approximation(copy.deepcopy(dem),x_star)
+                    dem_ma[0][0] = dem[0][0]
+                    posy = gpRow_divide(copy.deepcopy(num), dem_ma)
+                    for j in numix:
+                        gpRows[j] = posy[j-numix[0]]
+
+        print()
+        for rw in gpRows:
+            print(rw)
+
+        pack = {}
+        pack['Linear_Program'] = [False]
+        pack['Quadratic_Program'] = [False]
+        pack['Geometric_Program'] = [True, gpRows, ['<=']*gpRows[-1][0]]
+        
+        if itr == 0:
+            prevObj = np.inf
+        else:
+            prevObj = res['primal objective']
+        res = solve_GP(pack)
+
+        new_x_star = np.exp(res['x'])
+        reltol_check = abs(prevObj - res['primal objective'])/res['primal objective'] <= reltol
+        var_reltol_check = all([abs(new_x_star[i]-x_star[i])/new_x_star[i] <= var_reltol for i in range(0,len(x_star))])
+
+        if var_reltol_check and reltol_check:
+            break
+        else:
+            print(itr)
+            # print(res)
+            print(res['primal objective'])
+            print(new_x_star)
+            x_star = [ nxv[0] for nxv in new_x_star.tolist()]
+
+    return res
+
+def cvxopt_solve(m, use_pccp = True):
     cvxopt.solvers.options['show_progress'] = False
     cvxopt.solvers.options['maxiters'] = 1000
     cvxopt.printing.options['width'] = -1
@@ -1399,7 +1635,11 @@ def cvxopt_solve(m):
         res = solve_GP(structures)
         res['problem_structure'] = 'geometric_program'
     elif structures['Signomial_Program'][0]:
-        res = solve_SP(structures,m)
+        if use_pccp:
+            res = solve_PCCP(structures,m)
+        else:
+            res = solve_PCCP(structures,m,use_pccp=use_pccp)
+            # res = solve_SP(structures,m)
         res['problem_structure'] = 'signomial_program'
     else:
         # print(structures)
