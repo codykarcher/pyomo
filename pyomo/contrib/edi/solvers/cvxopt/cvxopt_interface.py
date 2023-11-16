@@ -1048,12 +1048,7 @@ def convexity_detector(pyomo_component):
     return structures
 
 def solve_LP(structures):
-    import cvxopt
-    cvxopt.solvers.options['show_progress'] = False
-    cvxopt.solvers.options['maxiters'] = 1000
-    cvxopt.printing.options['width'] = -1
 
-    # structures = convexity_detector(m)
     c = cvxopt.matrix(structures['Linear_Program'][1][0][0])
     objective_shift = structures['Linear_Program'][1][1]
     AG = structures['Linear_Program'][1][2]
@@ -1099,12 +1094,6 @@ def solve_LP(structures):
 
 
 def solve_QP(structures):
-    import cvxopt
-    cvxopt.solvers.options['show_progress'] = False
-    cvxopt.solvers.options['maxiters'] = 1000
-    cvxopt.printing.options['width'] = -1
-
-    # structures = convexity_detector(m)
 
     P = cvxopt.matrix( structures['Quadratic_Program'][1][0] )
     q = cvxopt.matrix(structures['Quadratic_Program'][1][1])
@@ -1152,8 +1141,6 @@ def solve_QP(structures):
 
 def solve_GP(structures):
 
-    # structures = convexity_detector(m)
-    
     trm_idx = [ structures['Geometric_Program'][1][i][0] for i in range(0,len(structures['Geometric_Program'][1])) ]
     tm_num = 0
     ctr = 0
@@ -1292,9 +1279,6 @@ def pccp_modification(constraintList,penalty_exponent=5.0):
                 slackRow[0] = None
                 slackRow[1] = 1.0
                 slackRow[slackStartIndex+spIndex] = 1.0
-                # print(slackRow)
-                # print(constraintList[i]['denominator'])
-                # print(gpRow_multiply(constraintList[i]['denominator'], [slackRow]))
                 constraintList[i]['denominator'] = gpRow_multiply(constraintList[i]['denominator'], [slackRow])
                 spIndex += 1
             elif constraintList[i]['approximateNumerator']==True:
