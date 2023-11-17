@@ -30,9 +30,12 @@ def solve_QP(structures):
     b = None
     h = None
 
+    eqUnscramble = []
+    iqUnscramble = []
     if AG is not None:
         for i in range(0,len(AG)):
             if operators[i] == '==':
+                eqUnscramble.append(i)
                 if A is None:
                     A = [AG[i].tolist()]
                     b = [-1*bh[i]]
@@ -40,6 +43,7 @@ def solve_QP(structures):
                     A += [AG[i].tolist()]
                     b += [-1*bh[i]]
             else:
+                iqUnscramble.append(i)
                 if G is None:
                     G = [AG[i].tolist()]
                     h = [-1*bh[i]]
@@ -59,5 +63,7 @@ def solve_QP(structures):
     # cvxopt adds a 1/2 to the quadratic term, need to multiply by 2
     res = cvxopt.solvers.qp(2.0*P,q,G,h,A,b)
     res['objective_shift'] = objective_shift 
+    res['inequality_unscramble'] = iqUnscramble
+    res['equality_unscramble']   = eqUnscramble
 
     return res

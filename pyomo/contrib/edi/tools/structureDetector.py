@@ -55,6 +55,7 @@ def structure_detector(pyomo_component):
         )
     ]
 
+    N_bound_cons = 0
     for vr in variableList:
         if vr.domain.name not in ['Reals','NonNegativeReals','NonPositiveReals']:
             return unstructured_dict() | { "message":"A non-continuous variable was detected" } 
@@ -82,6 +83,7 @@ def structure_detector(pyomo_component):
                 raise ValueError('Could not found a unique identifier for the lower bound on variable '+vr.name)
 
             setattr(pyomo_component, proposedKey, pyo.Constraint(expr = vr >= var_lower_bound))
+            N_bound_cons += 1
 
         if var_upper_bound is not None:
             proposedKey = vr.name + '_upperBound'
@@ -93,6 +95,7 @@ def structure_detector(pyomo_component):
                 raise ValueError('Could not found a unique identifier for the upper bound on variable '+vr.name)
 
             setattr(pyomo_component, proposedKey, pyo.Constraint(expr = vr <= var_lower_bound))
+            N_bound_cons += 1
 
     objectives = [
         obj
@@ -189,12 +192,14 @@ def structure_detector(pyomo_component):
                     structures['Linear_Program'][0] = False  
 
     # Iterate over the constraints
+    N_cons = 0
     if len(constraints) > 0:
         conCounter = 0
         operatorList = []
         for i in range(0, len(constraints)):
             con = constraints[i]
             for c in con.values():
+                N_cons += 1
                 cexpr = c.expr
                 rv = visitor.walk_expression(cexpr)
                 for rvv in rv:
@@ -324,6 +329,10 @@ def structure_detector(pyomo_component):
                         structures['Geometric_Program'][2] = None
                         break
 
+    structures['info'] = {}
+    structures['info']['N_cons_total']    = N_cons
+    structures['info']['N_cons_noBounds'] = N_cons - N_bound_cons
+    structures['info']['N_cons_bounds']   = N_bound_cons
     return structures
 
 

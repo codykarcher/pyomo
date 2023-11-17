@@ -31,8 +31,11 @@ def solve_LP(structures):
     b = None
     h = None
 
+    eqUnscramble = []
+    iqUnscramble = []
     for i in range(0,len(AG)):
         if operators[i] == '==':
+            eqUnscramble.append(i)
             if A is None:
                 A = [AG[i].tolist()]
                 b = [bh[i]]
@@ -40,6 +43,7 @@ def solve_LP(structures):
                 A += [AG[i].tolist()]
                 b += [bh[i]]
         else:
+            iqUnscramble.append(i)
             if G is None:
                 G = [AG[i].tolist()]
                 h = [bh[i]]
@@ -58,6 +62,8 @@ def solve_LP(structures):
 
     res = cvxopt.solvers.lp(c,G,h,A,b)
     res['objective_shift'] = objective_shift 
+    res['inequality_unscramble'] = iqUnscramble
+    res['equality_unscramble']   = eqUnscramble
 
     return res
 
