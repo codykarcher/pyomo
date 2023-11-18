@@ -12,6 +12,8 @@
 import sys
 import logging
 
+import pyomo.environ as pyo
+
 from pyomo.contrib.appsi.base import (
     Solver, 
     SolverConfig, 
@@ -20,10 +22,24 @@ from pyomo.contrib.appsi.base import (
     TerminationCondition
 )
 
+from pyomo.core.base.block import _BlockData
+from pyomo.common.timing import HierarchicalTimer
+from pyomo.common.config import ConfigValue, NonNegativeInt
+from pyomo.core.base.var import ScalarVar, _GeneralVarData, IndexedVar
+from pyomo.common.log import LogStream
+from pyomo.common.tee import capture_output, TeeStream
+
+from pyomo.contrib.edi.tools.structureDetector import structure_detector
+from pyomo.contrib.edi.solvers.cvxopt.LP import solve_LP
+from pyomo.contrib.edi.solvers.cvxopt.QP import solve_QP
+from pyomo.contrib.edi.solvers.cvxopt.GP import solve_GP
+
 from pyomo.common.dependencies import attempt_import
 cvxopt, cvxopt_available = attempt_import( "cvxopt" )
 # if not cvxopt_available:
 #     raise ImportError('The CVXOPT solver requires cvxopt')
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +74,7 @@ class CVXOPTResults(Results):
     def __init__(self):
         super().__init__()
         self.wallclock_time = None
+        self.messages = None
 
 
 class CVXOPT(Solver):
@@ -110,22 +127,22 @@ class CVXOPT(Solver):
         # if self.config.time_limit is not None:
         #     scip_model.setParam('limits/time', self.config.time_limit)
 
-        # cvxopt.solver.options['show_progress'] 
+        # cvxopt.solvers.options['show_progress'] 
         #     Whether to print or not
         #     True/False (default: True)
-        # cvxopt.solver.options['maxiters']
+        # cvxopt.solvers.options['maxiters']
         #     Maximum number of convex iterations
         #     positive integer (default: 100)
-        # cvxopt.solver.options['refinement']    = self.options['refinement']      
+        # cvxopt.solvers.options['refinement']    = self.options['refinement']      
         #     number of iterative refinement steps when solving KKT equations (only SOCP I think)
         #     nonnegative integer (default: 1)
-        # cvxopt.solver.options['abstol'] 
+        # cvxopt.solvers.options['abstol'] 
         #     Required primal/dual gap tolerance to return as optimal
         #     scalar (default: 1e-7)
-        # cvxopt.solver.options['reltol'] 
+        # cvxopt.solvers.options['reltol'] 
         #     Required RELATIVE primal/dual gap tolerance to return as optimal
         #     scalar (default: 1e-6)
-        # cvxopt.solver.options['feastol'] 
+        # cvxopt.solvers.options['feastol'] 
         #     Required feasibility tolerance for primal and dual to return as optimal
         #     scalar (default: 1e-7).
 
@@ -140,14 +157,14 @@ class CVXOPT(Solver):
         }
 
         for key, val in defaults.items():
-            cvxopt.solver.options[key] = val
+            cvxopt.solvers.options[key] = val
 
         #map from options to cvxopt things
         for key, val in self.options.items():
             if ky in ['show_progress', 'maxiters', 'refinement', 'abstol', 'reltol', 'feastol']:
-                cvxopt.solver.options[key] = val
+                cvxopt.solvers.options[key] = val
 
-    def _postsolve(self, res, scip_model, var_map):
+    def _postsolve(self, res, unwrappedVariables):
         results = Results()
 
         status = res['status']
@@ -180,22 +197,34 @@ class CVXOPT(Solver):
             results.best_feasible_objective = None
             results.best_objective_bound    = None
 
+        results.solve_type = res['problem_structure']
+
         if res['status'] == 'optimal':
-            sol = scip_model.getBestSol()
-            primals = dict()
-            for pv, sv in var_map.items():
-                val = sol[sv]
+            primals = {}
+            for i in range(0,len(unwrappedVariables)):
                 #key is id of variable, val is tuple of var and val
-                primals[id(pv)] = (pv, val)
+                primals[id(unwrappedVariables[i])] = (unwrappedVariables[i], res['x'][i])
         else:
             primals = None
 
         # reduced costs are duals for variable bounds
         # need to seperate out the variable bounds into the reduced cost bin
+
+        # Parameters
+        # ----------
+        # primals: dict
+        #     maps id(Var) to (var, value)
+        # duals: dict
+        #     maps Constraint to dual value
+        # slacks: dict
+        #     maps Constraint to slack value
+        # reduced_costs: dict
+        #     maps id(Var) to (var, reduced_cost)
+
         results.solution_loader = SolutionLoader(primals=primals, duals=None, slacks=None, reduced_costs=None)
 
         if self.config.load_solution:
-            if scip_model.getNSols() >= 1:
+            if res['status'] == 'optimal':
                 if results.termination_condition != TerminationCondition.optimal:
                     logger.warning(
                         'Loading a feasible but suboptimal solution. '
@@ -219,20 +248,28 @@ class CVXOPT(Solver):
             timer = HierarchicalTimer()
         timer.start('solve')
 
-        # timer.start('create  model')
-        # # variable_map maps pyomo variables to scip variables
-        # # key: varData , value is idx in cvxopt
-        # scip_model, var_map = create_scip_model(model, symbol_map=self._symbol_map, labeler=labeler, only_child_vars=self._only_child_vars)
-        # timer.stop('create SCIP model')
+        variableList = [ vr for vr in model.component_objects( pyo.Var, descend_into=True, active=True ) ]
 
-        self._set_options(scip_model, var_map)
+        unwrappedVariables = []
+        vrIdx = -1
+        for i in range(0, len(variableList)):
+            vr = variableList[i]
+            vrIdx += 1
+            if isinstance(vr, ScalarVar):
+                unwrappedVariables.append(vr)
+            elif isinstance(vr, IndexedVar):
+                unwrappedVariables.append(vr)
+                for sd in vr.index_set().data():
+                    vrIdx += 1
+                    unwrappedVariables.append(vr[sd])
+            else:
+                raise DeveloperError( 'Variable is not a variable.  Should not happen.  Contact developers' )
+
+
+        self._set_options()
 
         # copy paste
-        ostreams = [
-            LogStream(
-                level=self.config.log_level, logger=self.config.solver_output_logger
-            )
-        ]
+        ostreams = [ LogStream( level=self.config.log_level, logger=self.config.solver_output_logger ) ]
         if self.config.stream_solver:
             ostreams.append(sys.stdout)
         if self.config.logfile:
@@ -243,14 +280,28 @@ class CVXOPT(Solver):
             # take output and send to logger and term
             with TeeStream(*ostreams) as t:
                 with capture_output(output=t.STDOUT, capture_fd=True):
-                    timer.start('scip optimize')
-                    scip_model.optimize()
-                    timer.stop('scip optimize')
+                    timer.start('structure walker')
+                    structures = structure_detector(model)
+                    timer.stop('structure walker')
+
+                    timer.start('cvxopt optimize')
+                    if structures['Linear_Program'][0]:
+                        cvxoptRes = solve_LP(structures)
+                        cvxoptRes['problem_structure'] = 'linear_program'
+                    elif structures['Quadratic_Program'][0]:
+                        cvxoptRes = solve_QP(structures)
+                        cvxoptRes['problem_structure'] = 'quadratic_program'
+                    elif structures['Geometric_Program'][0]:
+                        cvxoptRes = solve_GP(structures)
+                        cvxoptRes['problem_structure'] = 'geometric_program'
+                    else:
+                        raise ValueError('Could not convert the formulation to a valid CVXOPT structure (LP,QP,GP)')
+                    timer.stop('cvxopt optimize')
         finally:
             if self.config.logfile:
                 f.close()
 
-        res = self._postsolve(scip_model, var_map)
+        res = self._postsolve(cvxoptRes,unwrappedVariables)
 
         timer.stop('solve')
 

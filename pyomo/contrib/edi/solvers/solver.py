@@ -13,11 +13,6 @@ from pyomo.common.dependencies import numpy, numpy_available
 from pyomo.common.dependencies import attempt_import
 from pyomo.contrib.edi.tools.structureDetector import structure_detector
 
-if numpy_available:
-    import numpy as np
-else:
-    raise ImportError('The CVXOPT solver requires numpy')
-
 cvxopt, cvxopt_available = attempt_import( "cvxopt" )
 if not cvxopt_available:
     raise ImportError('The CVXOPT solver requires cvxopt')

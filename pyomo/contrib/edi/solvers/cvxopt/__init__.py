@@ -14,3 +14,5 @@
 #
 #  This software is distributed under the 3-clause BSD License.
 #  ___________________________________________________________________________
+
+from pyomo.contrib.edi.solvers.cvxopt.cvxopt import CVXOPT

@@ -85,11 +85,20 @@ def solve_GP(structures):
     res['z']                = [] # inequality   
     res['s']                = cvxopt.exp(res_transformed['snl']) - 1
 
+    res['N_cons_total']    = structures['info']['N_cons_total']   
+    res['N_cons_noBounds'] = structures['info']['N_cons_noBounds']
+    res['N_cons_bounds']   = structures['info']['N_cons_bounds']  
+
+    iqUnscramble = []
+    eqUnscramble = []
+
     for i in range(0,len(unscrambler)):
         vl = unscrambler[i]
         if isinstance(vl,int):
+            iqUnscramble.append(i)
             res['z'].append(res_transformed['znl'][vl])
         else: # is list
+            eqUnscramble.append(i)
             y1 = res['z'].append(res_transformed['znl'][vl[0]])
             y2 = res['z'].append(res_transformed['znl'][vl[1]])
 
@@ -98,13 +107,16 @@ def solve_GP(structures):
                 y1 = y2
                 y2 = y1temp
 
-            if abs(y1) >= cvxopt.solver.options['feastol']:
+            if abs(y1) >= cvxopt.solvers.options['feastol']:
                 raise ValueError('An equality constraint threw an unexpected dual')
             
-            res['y'].append(y2)
+            res['y'].append(1/res['primal objective']*y2)
 
     res['y'] = cvxopt.matrix(res['y'])
     res['z'] = cvxopt.matrix(res['z'])
+
+    res['inequality_unscramble'] = iqUnscramble
+    res['equality_unscramble']   = eqUnscramble
 
     return res
 

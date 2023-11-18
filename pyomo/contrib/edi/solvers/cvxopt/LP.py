@@ -65,5 +65,9 @@ def solve_LP(structures):
     res['inequality_unscramble'] = iqUnscramble
     res['equality_unscramble']   = eqUnscramble
 
+    res['N_cons_total']    = structures['info']['N_cons_total']   
+    res['N_cons_noBounds'] = structures['info']['N_cons_noBounds']
+    res['N_cons_bounds']   = structures['info']['N_cons_bounds']  
+
     return res
 
